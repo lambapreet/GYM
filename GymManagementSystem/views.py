@@ -1,11 +1,12 @@
 from django.shortcuts import render, redirect, get_object_or_404
 from django.contrib import messages
-from django.contrib.auth.decorators import login_required
+from django.contrib.auth.decorators import login_required,  user_passes_test
 from django.contrib.auth import authenticate, login, logout
 from .models import *
 from .forms import *
 from random import randint
 from django.urls import reverse
+from django.contrib.auth import update_session_auth_hash
 
 # Create your views here.
 
@@ -130,3 +131,125 @@ def user_profile(request):
     # Fetch user data safely
     data = get_object_or_404(Signup, user=request.user)
     return render(request, "user_profile.html", {"data": data})
+
+def user_change_password(request):
+    if request.method == "POST":
+        old_password = request.POST['pwd1']  # Old password
+        new_password = request.POST['pwd2']  # New password
+        confirm_password = request.POST['pwd3']  # Confirm password
+
+        user = request.user
+
+        # Check if the old password is correct
+        if not user.check_password(old_password):
+            messages.error(request, "Old password is incorrect.")
+            return redirect('user_change_password')
+
+        # Check if new password matches confirmation
+        if new_password != confirm_password:
+            messages.error(request, "New password and confirm password do not match.")
+            return redirect('user_change_password')
+
+        # Change password
+        user.set_password(new_password)
+        user.save()
+
+        # Keep user logged in after password change
+        update_session_auth_hash(request, user)
+
+        messages.success(request, "Password changed successfully.")
+        return redirect('user_profile')  # Redirect to profile or login page
+
+    return render(request, 'user_change_password.html')
+
+def is_admin(user):
+    return user.is_superuser
+
+@login_required
+@user_passes_test(is_admin)  # Restrict to admins
+def manageCategory(request):
+    category = Category.objects.all()
+    error = None  # Default value
+
+    if request.method == "POST":
+        categoryname = request.POST.get('categoryname', '').strip()
+
+        if not categoryname:
+            messages.error(request, "Category name cannot be empty.")
+            return redirect('manageCategory')
+
+        # Check if category already exists
+        if Category.objects.filter(categoryname__iexact=categoryname).exists():
+            messages.error(request, "Category already exists.")
+            return redirect('manageCategory')
+
+        try:
+            Category.objects.create(categoryname=categoryname)
+            messages.success(request, "Category added successfully!")
+        except Exception as e:
+            messages.error(request, f"Error adding category: {str(e)}")
+
+    return render(request, 'admin/manageCategory.html', {"category": category})
+
+@login_required
+@user_passes_test(is_admin)  # Restrict to admins
+def editCategory(request, pid):
+    category = get_object_or_404(Category, id=pid)  # Handle invalid IDs
+
+    if request.method == "POST":
+        categoryname = request.POST.get('categoryname', '').strip()
+
+        if not categoryname:
+            messages.error(request, "Category name cannot be empty.")
+            return redirect('editCategory', pid=pid)
+
+        # Check if a category with the same name already exists (excluding the current one)
+        if Category.objects.filter(categoryname__iexact=categoryname).exclude(id=pid).exists():
+            messages.error(request, "Category with this name already exists.")
+            return redirect('editCategory', pid=pid)
+
+        # Save the updated category
+        try:
+            category.categoryname = categoryname
+            category.save()
+            messages.success(request, "Category updated successfully!")
+            return redirect('manageCategory')  # Redirect to category list
+        except Exception as e:
+            messages.error(request, f"Error updating category: {str(e)}")
+
+    return render(request, 'admin/editCategory.html', {"category": category})
+
+
+@login_required
+@user_passes_test(is_admin)  # Restrict to admins
+def deleteCategory(request, pid):
+    category = get_object_or_404(Category, id=pid)  # Handle invalid IDs
+
+    try:
+        category.delete()
+        messages.success(request, "Category deleted successfully!")
+    except Exception as e:
+        messages.error(request, f"Error deleting category: {str(e)}")
+
+    return redirect('manageCategory')  # Redirect back to category list
+
+@login_required(login_url='/admin_login/')  # Ensures user is logged in
+@user_passes_test(is_admin, login_url='/admin_login/')  # Ensures user is an admin
+def reg_user(request):
+    data = Signup.objects.all()
+    return render(request, "admin/reg_user.html", {"data": data})
+
+@login_required(login_url='/admin_login/')
+@user_passes_test(is_admin, login_url='/admin_login/')  # Restrict to admins
+def delete_user(request, pid):
+    user_profile = get_object_or_404(Signup, id=pid)  # Handle invalid IDs
+
+    # Delete the associated User record
+    try:
+        user = user_profile.user  # Assuming a OneToOneField in Signup linking to User
+        user.delete()
+        messages.success(request, "User deleted successfully!")
+    except Exception as e:
+        messages.error(request, f"Error deleting user: {str(e)}")
+
+    return redirect('reg_user')  # Redirect back to the user list
