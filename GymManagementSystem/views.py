@@ -7,6 +7,11 @@ from .forms import *
 from random import randint
 from django.urls import reverse
 from django.contrib.auth import update_session_auth_hash
+from django.db import IntegrityError
+from django.http import JsonResponse
+from datetime import datetime, timedelta
+from .utils import random_with_N_digits  
+
 
 # Create your views here.
 
@@ -253,3 +258,385 @@ def delete_user(request, pid):
         messages.error(request, f"Error deleting user: {str(e)}")
 
     return redirect('reg_user')  # Redirect back to the user list
+
+
+
+@login_required(login_url='admin_login')
+def managePackageType(request):
+    package = Packagetype.objects.all()
+    category = Category.objects.all()
+    error = None  # Initialize error variable
+
+    if request.method == "POST":
+        cid = request.POST.get('category')
+        packagename = request.POST.get('packagename')
+
+        if cid and packagename:  # Validate input
+            try:
+                category_instance = Category.objects.get(id=cid)
+                Packagetype.objects.create(category=category_instance, packagename=packagename)
+                error = "no"
+            except Category.DoesNotExist:
+                error = "invalid_category"
+            except IntegrityError:
+                error = "yes"
+        else:
+            error = "missing_fields"
+
+    context = {
+        'package': package,
+        'category': category,
+        'error': error
+    }
+    return render(request, 'admin/managePackageType.html', context)
+
+
+@login_required(login_url='admin_login')
+def editPackageType(request, pid):
+    package = get_object_or_404(Packagetype, id=pid)
+    category = Category.objects.all()
+    error = None  # Initialize error variable
+
+    if request.method == "POST":
+        cid = request.POST.get('category')
+        packagename = request.POST.get('packagename')
+
+        if cid and packagename:  # Validate input
+            try:
+                category_instance = Category.objects.get(id=cid)
+                package.category = category_instance
+                package.packagename = packagename
+                package.save()
+                error = "no"
+            except Category.DoesNotExist:
+                error = "invalid_category"
+            except IntegrityError:
+                error = "yes"
+        else:
+            error = "missing_fields"
+
+    context = {
+        'package': package,
+        'category': category,
+        'error': error
+    }
+    return render(request, 'admin/editPackageType.html', context)
+
+@login_required(login_url='admin_login')
+def deletePackageType(request, pid):
+    if request.method == "POST":  # Ensure deletion is via POST
+        package = get_object_or_404(Packagetype, id=pid)
+        package.delete()
+    return redirect('managePackageType')
+
+
+@login_required(login_url='admin_login')
+def addPackage(request):
+    categories = Category.objects.all()
+    packages = Packagetype.objects.all()
+    error = None  # Initialize error variable
+
+    if request.method == "POST":
+        cid = request.POST.get('category')
+        package_id = request.POST.get('packagename')
+        titlename = request.POST.get('titlename')
+        duration = request.POST.get('duration')
+        price = request.POST.get('price')
+        description = request.POST.get('description')
+
+        if cid and package_id and titlename and duration and price and description:
+            try:
+                category_instance = get_object_or_404(Category, id=cid)
+                package_instance = get_object_or_404(Packagetype, id=package_id)
+
+                Package.objects.create(
+                    category=category_instance,
+                    packagename=package_instance,
+                    titlename=titlename,
+                    packageduration=duration,
+                    price=price,
+                    description=description
+                )
+                error = "no"
+            except IntegrityError:
+                error = "yes"
+        else:
+            error = "missing_fields"
+
+    context = {
+        'categories': categories,
+        'packages': packages,
+        'error': error
+    }
+    return render(request, 'admin/addPackage.html', context)
+
+@login_required(login_url='admin_login')
+def managePackage(request):
+    packages = Package.objects.all()
+    context = {'packages': packages}
+    return render(request, 'admin/managePackage.html', context)
+
+@login_required(login_url='/user_login/')
+def booking_history(request):
+    try:
+        user_signup = Signup.objects.get(user=request.user)  # Fetch Signup instance
+        bookings = Booking.objects.filter(register=user_signup)  # Get user's bookings
+    except Signup.DoesNotExist:
+        bookings = None  # Handle case where user has no Signup record
+
+    context = {'bookings': bookings}
+    return render(request, "booking_history.html", context)
+
+def is_admin(user):
+    return user.is_staff  # Ensures only staff can access
+
+@login_required(login_url='/admin_login/')
+@user_passes_test(is_admin, login_url='/booking_history/')
+def new_booking(request):
+    action = request.GET.get('action')
+    
+    # Default query
+    data = Booking.objects.all()
+
+    # Filter based on status
+    status_filter = {"New": "1", "Partial": "2", "Full": "3"}
+    if action in status_filter:
+        data = data.filter(status=status_filter[action])
+
+    context = {"bookings": data, "action": action}
+    return render(request, "admin/new_booking.html", context)
+
+
+@login_required(login_url='/user_login/')
+def booking_detail(request, pid):
+    booking = get_object_or_404(Booking, id=pid)
+    payment_history = Paymenthistory.objects.filter(booking=booking)
+
+    if request.method == "POST":
+        price = request.POST.get('price')
+        status = request.POST.get('status')
+
+        if not price or not status:
+            messages.error(request, "Price and Status are required fields.")
+        else:
+            try:
+                price = float(price)  # Ensure price is a valid number
+                booking.status = status
+                booking.save()
+                Paymenthistory.objects.create(booking=booking, price=price, status=status)
+                messages.success(request, "Action Updated")
+                return redirect('booking_detail', pid=pid)
+            except ValueError:
+                messages.error(request, "Invalid price value.")
+            except IntegrityError:
+                messages.error(request, "Error updating payment history.")
+
+    context = {
+        "booking": booking,
+        "payment_history": payment_history
+    }
+
+    if request.user.is_staff:
+        return render(request, "admin/admin_booking_detail.html", context)
+    else:
+        return render(request, "user_booking_detail.html", context)
+
+
+def is_admin(user):
+    return user.is_staff  # Ensures only staff can access
+
+@login_required(login_url='/admin_login/')
+@user_passes_test(is_admin, login_url='/')
+def editPackage(request, pid):
+    package_instance = get_object_or_404(Package, id=pid)
+    categories = Category.objects.all()
+    packagetypes = Packagetype.objects.all()
+
+    if request.method == "POST":
+        cid = request.POST.get('category')
+        packagename_id = request.POST.get('packagename')
+        titlename = request.POST.get('titlename')
+        duration = request.POST.get('duration')
+        price = request.POST.get('price')
+        description = request.POST.get('description')
+
+        try:
+            selected_category = get_object_or_404(Category, id=cid)
+            selected_package_type = get_object_or_404(Packagetype, id=packagename_id)
+
+            # Validate price
+            try:
+                price = float(price)
+            except ValueError:
+                messages.error(request, "Invalid price format.")
+                return redirect('editPackage', pid=pid)
+
+            # Update package
+            package_instance.category = selected_category
+            package_instance.packagename = selected_package_type
+            package_instance.titlename = titlename
+            package_instance.packageduration = duration
+            package_instance.price = price
+            package_instance.description = description
+
+            package_instance.save()
+            messages.success(request, "Package updated successfully!")
+            return redirect('managePackage')
+
+        except IntegrityError:
+            messages.error(request, "Error updating package. Please try again.")
+
+    context = {
+        "package": package_instance,
+        "categories": categories,
+        "packagetypes": packagetypes
+    }
+    return render(request, "admin/editPackage.html", context)
+
+
+@login_required(login_url='/admin_login/')  # Ensures only logged-in users can access
+def load_subcategory(request):
+    category_id = request.GET.get('category')
+
+    if not category_id:
+        return JsonResponse({"error": "Category ID is required"}, status=400)
+
+    # Fetch subcategories safely
+    subcategories = Package.objects.filter(category=category_id).order_by('packagename').values('id', 'packagename')
+
+    return JsonResponse(list(subcategories), safe=False)
+
+def is_admin(user):
+    return user.is_staff
+
+@login_required(login_url='/admin_login/')
+@user_passes_test(is_admin, login_url='/')
+def deletePackage(request, pid):
+    package = get_object_or_404(Package, id=pid)
+    package.delete()
+    messages.success(request, "Package deleted successfully.")
+    return redirect('managePackage')
+
+@login_required(login_url='/admin_login/')
+@user_passes_test(is_admin, login_url='/')
+def deleteBooking(request, pid):
+    booking = get_object_or_404(Booking, id=pid)
+    booking.delete()
+    messages.success(request, "Booking deleted successfully.")
+    return redirect('new_booking')
+
+
+@login_required(login_url='/admin_login/')
+@user_passes_test(is_admin, login_url='/')
+def bookingReport(request):
+    data = None
+    data2 = False  # More meaningful name instead of `data2`
+    
+    if request.method == "POST":
+        fromdate = request.POST.get('fromdate')
+        todate = request.POST.get('todate')
+
+        if not fromdate or not todate:
+            messages.error(request, "Both dates are required.")
+        else:
+            try:
+                # Convert string dates to datetime objects
+                from_date = datetime.strptime(fromdate, "%Y-%m-%d")
+                to_date = datetime.strptime(todate, "%Y-%m-%d") + timedelta(days=1)  # Include full to_date
+
+                # Fetch bookings within date range
+                data = Booking.objects.filter(creationdate__gte=from_date, creationdate__lt=to_date)
+                data2 = True
+            except ValueError:
+                messages.error(request, "Invalid date format. Please enter valid dates.")
+
+    context = {
+        "data": data,
+        "data2": data2
+    }
+    return render(request, "admin/bookingReport.html", context)
+
+
+@login_required(login_url='/admin_login/')
+@user_passes_test(is_admin, login_url='/')
+def regReport(request):
+    data = None
+    data_available = False  # Better variable name instead of `data2`
+    
+    if request.method == "POST":
+        fromdate = request.POST.get('fromdate')
+        todate = request.POST.get('todate')
+
+        if not fromdate or not todate:
+            messages.error(request, "Both dates are required.")
+        else:
+            try:
+                # Convert date strings to datetime objects
+                from_date = datetime.strptime(fromdate, "%Y-%m-%d")
+                to_date = datetime.strptime(todate, "%Y-%m-%d") + timedelta(days=1)  # Include full to_date
+
+                # Fetch signups within date range
+                data = Signup.objects.filter(creationdate__gte=from_date, creationdate__lt=to_date)
+                data_available = True
+            except ValueError:
+                messages.error(request, "Invalid date format. Please enter valid dates.")
+
+    context = {
+        "data": data,
+        "data_available": data_available
+    }
+    return render(request, "admin/regReport.html", context)
+
+
+@login_required(login_url='/admin_login/')
+def changePassword(request):
+    if request.method == "POST":
+        old_password = request.POST.get('oldpassword')
+        new_password = request.POST.get('newpassword')
+
+        if not old_password or not new_password:
+            messages.error(request, "All fields are required.")
+            return redirect('changePassword')
+
+        user = request.user
+
+        if user.check_password(old_password):
+            user.set_password(new_password)
+            user.save()
+            update_session_auth_hash(request, user)  # Prevents logout after password change
+            messages.success(request, "Password changed successfully.")
+            return redirect('changePassword')
+        else:
+            messages.error(request, "Incorrect old password.")
+
+    return render(request, 'admin/changePassword.html')
+
+
+def random_with_N_digits(n):
+    if n <= 0:
+        raise ValueError("Number of digits must be greater than 0")
+    
+    range_start = 10**(n-1)
+    range_end = (10**n)-1
+    return randint(range_start, range_end)
+
+
+@login_required(login_url='/user_login/')
+def apply_booking(request, pid):
+    package = get_object_or_404(Package, id=pid)
+    register = get_object_or_404(Signup, user=request.user)
+
+    # Prevent duplicate booking for the same package
+    if Booking.objects.filter(package=package, register=register).exists():
+        messages.error(request, "You have already booked this package.")
+        return redirect('booking_history')
+
+    # Create the booking
+    booking = Booking.objects.create(
+        package=package, 
+        register=register, 
+        bookingnumber=random_with_N_digits(10)
+    )
+    
+    messages.success(request, "Booking Applied Successfully!")
+    return redirect('booking_history')  # Redirect to a meaningful page
